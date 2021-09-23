@@ -1,12 +1,12 @@
 import sys
-###
-import boto
-conn = boto.connect_s3()
+
+import boto3
+
+s3client = boto3.client('s3')
 
 # Since June 2017, Nutch intermediate crawl data isn't kept
 # on the public data set bucket
 bucket = 'commoncrawl-nutch'
-pds = conn.get_bucket(bucket)
 
 # Get all segments
 # s3://commoncrawl-nutch/segments.20150929/
@@ -18,8 +18,9 @@ if len(sys.argv) >= 3:
 expected_segments = 100
 if len(sys.argv) >= 4:
   expected_segments = int(sys.argv[3])
-segments = list(pds.list(target, delimiter='/'))
-print 'Total of {} segments'.format(len(segments))
+response = s3client.list_objects_v2(Bucket=bucket, Prefix=target, Delimiter='/')
+segments = [prfx['Prefix'] for prfx in response.get('CommonPrefixes')]
+print('Total of {} segments'.format(len(segments)))
 print('Expected number of fetch lists per segment: {}'.format(expected_fetch_lists))
 
 good, bad = 0, 0
@@ -28,30 +29,31 @@ d = {}
 seg_sizes = []
 dead_segs = set()
 for i, segment in enumerate(segments):
-  sys.stderr.write('\rProcessing segment {} of {}'.format(i, len(segments)))
-  fetchlists = list(pds.list(segment.name + 'crawl_generate/'))
+  sys.stderr.write('\rProcessing segment {} of {} ({})'.format(i, len(segments), segment))
+  response = s3client.list_objects_v2(Bucket=bucket, Prefix=segment + 'crawl_generate/', Delimiter='/')
+  fetchlists = response.get('Contents')
   if len(fetchlists) != expected_fetch_lists:
     bad += 1
     sys.stderr.write('\n')
-    sys.stderr.write('{} has {} fetchlists\n'.format(segment.name, len(fetchlists)))
-    dead_segs.add(segment.name)
+    sys.stderr.write('{} has {} fetchlists\n'.format(segment, len(fetchlists)))
+    dead_segs.add(segment)
   else:
     good += 1
-    seg_size = sum(x.size for x in fetchlists)
+    seg_size = sum(x['Size'] for x in fetchlists)
     if seg_size not in d:
       d[seg_size] = []
-    d[seg_size].append(segment.name)
+    d[seg_size].append(segment)
     seg_sizes.append((segment, seg_size))
 sys.stderr.write('\n')
 
 seg_sizes = sorted(seg_sizes, key=lambda x: x[1])
 
-print 'Total good segments: {}'.format(good)
-print 'Total bad segments: {}'.format(bad)
-print 'Total dead segments: {}'.format(len(dead_segs))
+print('Total good segments: {}'.format(good))
+print('Total bad segments: {}'.format(bad))
+print('Total dead segments: {}'.format(len(dead_segs)))
 if len(seg_sizes) != 0:
-  print 'Average size: {}'.format(sum(x[1] for x in seg_sizes) / len(seg_sizes))
-print 'Unique total sizes for segments: {}'.format(len(set(x[1] for x in seg_sizes)))
+  print('Average size: {}'.format(sum(x[1] for x in seg_sizes) / len(seg_sizes)))
+print('Unique total sizes for segments: {}'.format(len(set(x[1] for x in seg_sizes))))
 
 # rstrip the segment ends as sometimes we do silly tricks to get the segment name
 # i.e. rev | cut -d '/' -f 1 | rev
@@ -63,7 +65,7 @@ with open('/tmp/good_segs', 'w') as f:
     good_segs.add(good_seg)
     f.write('s3a://{}/{}\n'.format(bucket, good_seg.rstrip('/')))
 
-all_segs = set(x[0].name for x in seg_sizes)
+all_segs = set(x[0] for x in seg_sizes)
 bad_segs = all_segs - good_segs | dead_segs
 with open('/tmp/bad_segs', 'w') as f:
   for seg in bad_segs:

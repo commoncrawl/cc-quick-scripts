@@ -1,33 +1,36 @@
 import os
 import sys
-###
+
 from collections import defaultdict
-###
-# from prettyplotlib import plt
-###
-import boto
-conn = boto.connect_s3(anon=True)
 
-# Since April 2016, the public dataset bucket is s3://commoncrawl 
-# (migrated from s3://aws-publicdatasets/common-crawl)
-pds = conn.get_bucket('commoncrawl')
+import boto3
 
-# CC-MAIN-2016-07
+s3client = boto3.client('s3')
+
+# Since April 2016, the public dataset bucket is s3://commoncrawl/
+# (migrated from s3://aws-publicdatasets/common-crawl/)
+pds_bucket = 'commoncrawl'
+
+# crawl name, eg. "CC-MAIN-2016-07"
 target = str(sys.argv[1])
 
 sys.stderr.write('Processing {}\n'.format(target))
 
-cdx_bucket_conn = pds
-cdx_path = 'cc-index/cdx/' + target
+cdx_bucket = None
 if len(sys.argv) > 2:
-    print('Looking for cdx files in s3://{}/{}/'.format(sys.argv[2], sys.argv[3]))
-    cdx_bucket_conn = boto.connect_s3().get_bucket(sys.argv[2])
-    cdx_path = str(sys.argv[3])
+    print('Looking for cdx files in s3://{}/{}/cdx/'.format(sys.argv[2], target))
+    cdx_bucket = sys.argv[2]
+
+
 
 # Get all segments
-segments = list(pds.list('crawl-data/{}/segments/'.format(target), delimiter='/'))
+response = s3client.list_objects_v2(Bucket=pds_bucket,
+                                    Prefix='crawl-data/{}/segments/'.format(target),
+                                    Delimiter='/')
+segments = [prfx['Prefix'] for prfx in response.get('CommonPrefixes')]
+
 # Record the total size and all file paths for the segments
-files = dict(warc=[], wet=[], wat=[], segment=[x.name for x in segments],
+files = dict(warc=[], wet=[], wat=[], segment=segments,
              robotstxt=[], non200responses=[], cdx=[])
 size = dict(warc=[], wet=[], wat=[], robotstxt=[], non200responses=[], cdx=[])
 files_per_segment = dict()
@@ -35,21 +38,27 @@ files_per_segment = dict()
 # Traverse each segment and all the files they contain
 for i, segment in enumerate(segments):
   sys.stderr.write('\rProcessing segment {} of {}'.format(i, len(segments)))
-  seg = segment.name.split('/')[-2]
+  seg = segment.split('/')[-2]
   files_per_segment[seg] = defaultdict(int)
   for ftype in ['warc', 'wat', 'wet', 'robotstxt', 'non200responses']:
-    path = segment.name + ftype + '/'
+    path = segment + ftype + '/'
     if ftype == 'non200responses':
       # poorly named for historical reasons
-      path = segment.name + 'crawldiagnostics/'
-    for f in pds.list(path):
-      files[ftype].append(f.name)
-      size[ftype].append(f.size)
-      files_per_segment[seg][ftype] += 1
-  for f in cdx_bucket_conn.list(cdx_path + '/segments/' + seg + '/'):
-    files['cdx'].append(f.name)
-    size['cdx'].append(f.size)
-    files_per_segment[seg]['cdx'] += 1
+      path = segment + 'crawldiagnostics/'
+    response = s3client.list_objects_v2(Bucket=pds_bucket, Prefix=path, Delimiter='/')
+    if 'Contents' in response:
+      for f in response.get('Contents'):
+        files[ftype].append(f['Key'])
+        size[ftype].append(f['Size'])
+        files_per_segment[seg][ftype] += 1
+  paginator = s3client.get_paginator('list_objects_v2')
+  pages = paginator.paginate(Bucket=cdx_bucket,
+                             Prefix='{}/cdx/segments/{}/'.format(target, seg))
+  for page in pages:
+    for f in page['Contents']:
+      files['cdx'].append(f['Key'])
+      size['cdx'].append(f['Size'])
+      files_per_segment[seg]['cdx'] += 1
 sys.stderr.write('\n')
 
 # Write total size and file paths to files
@@ -74,21 +83,9 @@ for ftype, fsize in size.items():
 ###
 # To upload to the correct spot on S3
 # gzip *.paths
-# s3cmd put --acl-public *.paths.gz s3://commoncrawl/crawl-data/CC-MAIN-YYYY-WW/
-
-###
-# Plot
-#for ftype, fsize in size.items():
-#  if not fsize:
-#    continue
-#  plt.hist(fsize, bins=50)
-#  plt.xlabel('Size (bytes)')
-#  plt.ylabel('Count')
-#  plt.title('Distribution for {}'.format(ftype.upper()))
-#  plt.savefig(prefix + '{}_dist.pdf'.format(ftype))
-#  #plt.show(block=True)
-#  plt.close()
-###
+# for p in *.paths.gz; do
+#   aws s3 cp $p s3://commoncrawl/crawl-data/CC-MAIN-YYY-WW/ --acl public-read
+# done
 
 # Find missing WAT / WET files
 warc = set([x.strip() for x in open(prefix + 'warc.paths').readlines()])
@@ -132,7 +129,7 @@ prefix += 'weat.queued/'
 if not os.path.exists(prefix):
   os.mkdir(prefix)
 sys.stderr.write('Total of {} missing/incomplete segments with {} missing parts\n'.format(len(missing_segments), missing_files))
-for seg, files in missing_segments.iteritems():
+for seg, files in missing_segments.items():
   sys.stderr.write('{} has {} missing parts out of {}\n'.format(seg, len(files), files_per_segment[seg]['warc']))
   f = open(prefix + 'seg_{}'.format(seg), 'w')
   [f.write('s3a://commoncrawl/{}\n'.format(fn)) for fn in files]
