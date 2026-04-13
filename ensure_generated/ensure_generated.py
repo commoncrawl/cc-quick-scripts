@@ -2,7 +2,7 @@ import sys
 
 import boto3
 
-s3client = boto3.client('s3')
+s3client = boto3.Session(profile_name="cc").client('s3')
 
 # Since June 2017, Nutch intermediate crawl data isn't kept
 # on the public data set bucket
@@ -38,8 +38,18 @@ for i, segment in enumerate(segments):
     sys.stderr.write('{} has {} fetchlists\n'.format(segment, len(fetchlists)))
     dead_segs.add(segment)
   else:
-    good += 1
-    seg_size = sum(x['Size'] for x in fetchlists)
+    seg_size = 0
+    for fetch_partition in fetchlists:
+      fetch_list_size = fetch_partition['Size']
+      name = fetch_partition['Key'].split("/")[-1]
+      if fetch_list_size > 0:
+        good += 1
+        seg_size += fetch_list_size
+      else:
+        bad += 1
+        sys.stderr.write('\n')
+        sys.stderr.write('{} has fetchlist {} with size of 0\n'.format(segment, name))
+
     if seg_size not in d:
       d[seg_size] = []
     d[seg_size].append(segment)
@@ -48,12 +58,12 @@ sys.stderr.write('\n')
 
 seg_sizes = sorted(seg_sizes, key=lambda x: x[1])
 
-print('Total good segments: {}'.format(good))
-print('Total bad segments: {}'.format(bad))
-print('Total dead segments: {}'.format(len(dead_segs)))
+print('Total good fetchlists: {}'.format(good))
+print('Total bad name: {}'.format(bad))
+print('Total dead name: {}'.format(len(dead_segs)))
 if len(seg_sizes) != 0:
   print('Average size: {}'.format(sum(x[1] for x in seg_sizes) / len(seg_sizes)))
-print('Unique total sizes for segments: {}'.format(len(set(x[1] for x in seg_sizes))))
+print('Unique total sizes for segments: {}'.format(sum(set(x[1] for x in seg_sizes))))
 
 # rstrip the segment ends as sometimes we do silly tricks to get the segment name
 # i.e. rev | cut -d '/' -f 1 | rev
