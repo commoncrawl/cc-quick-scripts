@@ -2,7 +2,7 @@ import sys
 
 import boto3
 
-s3client = boto3.Session(profile_name="cc").client('s3')
+s3client = boto3.client('s3')
 
 # Since June 2017, Nutch intermediate crawl data isn't kept
 # on the public data set bucket
@@ -12,6 +12,8 @@ bucket = 'commoncrawl-nutch'
 # s3://commoncrawl-nutch/segments.20150929/
 # target = "segments.20150929"
 target = str(sys.argv[1])
+if not target.endswith('/'):
+  target += '/'
 expected_fetch_lists = 400
 if len(sys.argv) >= 3:
   expected_fetch_lists = int(sys.argv[2])
@@ -47,6 +49,7 @@ for i, segment in enumerate(segments):
         seg_size += fetch_list_size
       else:
         bad += 1
+        dead_segs.add(segment)
         sys.stderr.write('\n')
         sys.stderr.write('{} has fetchlist {} with size of 0\n'.format(segment, name))
 
@@ -58,12 +61,12 @@ sys.stderr.write('\n')
 
 seg_sizes = sorted(seg_sizes, key=lambda x: x[1])
 
-print('Total good fetchlists: {}'.format(good))
-print('Total bad name: {}'.format(bad))
-print('Total dead name: {}'.format(len(dead_segs)))
+print('Total good segments: {}'.format(good))
+print('Total bad/dead segments: {}'.format(bad))
+# print('Total dead segments: {}'.format(len(dead_segs)))
 if len(seg_sizes) != 0:
   print('Average size: {}'.format(sum(x[1] for x in seg_sizes) / len(seg_sizes)))
-print('Unique total sizes for segments: {}'.format(sum(set(x[1] for x in seg_sizes))))
+print('Unique total size for segments: {}'.format(sum(set(x[1] for x in seg_sizes))))
 
 # rstrip the segment ends as sometimes we do silly tricks to get the segment name
 # i.e. rev | cut -d '/' -f 1 | rev
@@ -86,5 +89,5 @@ if len(bad_segs) != 0 or len(good_segs) != expected_segments:
   # exit with error to stop crawl workflow, manual interaction required
   print('Need to fix segments:')
   print('- delete bad segments listed in /tmp/bad_segs')
-  print('- verify  segments listed in /tmp/bad_segs')
+  print('- verify segments listed in /tmp/bad_segs')
   sys.exit(1)
