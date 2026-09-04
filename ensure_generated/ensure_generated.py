@@ -42,7 +42,7 @@ granular_error_messages = []
 for i, segment in enumerate(segments):
   sys.stderr.write('\rProcessing segment {} of {} ({})'.format(i, len(segments), segment))
   fetchlists = []
-  for page in paginator.paginate(Bucket=bucket, Prefix=segment + 'crawl_generate/', Delimiter='/'):
+  for page in paginator.paginate(Bucket=bucket, Prefix=segment + 'crawl_generate/subfetchlist-', Delimiter='/'):
     fetchlists.extend(page.get('Contents') or [])
 
   if not fetchlists:
